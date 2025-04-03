@@ -11,12 +11,11 @@ from waitress import serve
 import os
 
 # Import Hailo SDK
-from hailo_platform import HailoContext
-from hailo_platform import Device
 from hailo_platform import HEF
 from hailo_platform import ConfigureParams
-from hailo_platform import InputVStreamParams
-from hailo_platform import OutputVStreamParams
+from hailo_platform import InputVStreamParams, OutputVStreamParams, FormatType
+from hailo_platform import VDevice
+from hailo_platform import HailoStreamInterface, InferVStreams
 
 # --- Configuration ---
 app = Flask(__name__)
@@ -227,7 +226,7 @@ def initialize_hailo():
     global hailo_device
     try:
         # Create Hailo device context
-        hailo_device = Device()
+        hailo_device = VDevice()
         print("Hailo device initialized successfully.")
         return True
     except Exception as e:
