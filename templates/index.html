@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YOLO Webcam App</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script>
+        // Pass backend variables to JavaScript
+        const initialMode = "{{ current_mode }}";
+        const initialSize = "{{ current_size }}";
+        const initialConf = {{ conf_threshold }};
+        const availableModes = {{ modes | tojson }};
+        const availableSizes = {{ sizes | tojson }}; // Renamed from model_sizes
+    </script>
+</head>
+<body>
+    <div id="container">
+        <div class="webcam-container" style="font-weight: normal;">
+            <h1>🎉 PARTY CAM 🎉</h1>
+            <!-- Video element to display webcam feed -->
+            <video id="webcam" autoplay playsinline muted></video>
+            <!-- Canvas element positioned over the video for drawing results -->
+            <canvas id="overlay"></canvas>
+        </div>
+
+        <!-- Hidden controls panel -->
+        <div id="controls" class="panel hidden">
+            <h3>Controls (Keys)</h3>
+            <p><strong>H:</strong> Toggle Controls Panel</p> 
+            <p><strong>S:</strong> Toggle Stats Panel</p>
+            <p><strong>M:</strong> Cycle Mode ({{ modes | join(', ') }})</p>
+            <p><strong>Up/Down Arrow:</strong> Adjust Confidence (+/- 0.05)</p>
+            <p><strong>Current Mode:</strong> <span id="current-mode-display">{{ current_mode }}</span></p>
+            <p><strong>Current Confidence:</strong> <span id="current-conf-display">{{ conf_threshold }}</span></p>
+        </div>
+
+
+        <!-- Hidden stats panel -->
+        <div id="stats" class="panel hidden">
+            <h3>Stats</h3>
+            <p><strong>Client FPS:</strong> <span id="fps-display">0.0</span></p>
+            <p><strong>Server Processing (ms):</strong> <span id="proc-time-display">0</span></p>
+            <p><strong>Detections:</strong></p>
+            <ul id="detection-list">
+                <!-- Detection counts will be populated here -->
+            </ul>
+        </div>
+
+        <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    </div>
+</body>
+</html>

@@ -1,0 +1,116 @@
+body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden; /* Prevent scrollbars */
+    background-color: #000; /* Black background */
+    color: white; /* Default text color */
+    font-family: sans-serif;
+}
+
+#container {
+    position: relative; /* Needed for absolute positioning of children */
+    width: 100vw; /* Full viewport width */
+    height: 100vh; /* Full viewport height */
+}
+
+#webcam {
+    display: block; /* Remove extra space below video */
+    width: 100%;
+    height: 100%;
+    object-fit: cover; /* Cover entire container, may crop */
+}
+
+#overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none; /* Allow clicks to pass through to video if needed */
+}
+
+.panel {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    background-color: rgba(0, 0, 0, 0.7);
+    padding: 15px;
+    border-radius: 5px;
+    max-width: 300px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+    z-index: 10; /* Ensure panels are on top */
+}
+
+.panel.hidden {
+    display: none;
+}
+
+#stats {
+    left: auto; /* Reset left */
+    right: 10px; /* Position stats on the right */
+}
+
+.panel h3 {
+    margin-top: 0;
+    border-bottom: 1px solid #555;
+    padding-bottom: 5px;
+    margin-bottom: 10px;
+}
+
+.panel p {
+    margin: 5px 0;
+    font-size: 0.9em;
+}
+
+.panel ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    font-size: 0.9em;
+}
+
+.panel li {
+    margin-bottom: 3px;
+}
+
+/* Define custom Budmo font */
+@font-face {
+    font-family: 'Budmo Jiggler'; /* Name you'll use in font-family property */
+    src: url('/static/budmo jiggler.otf') format('opentype'); /* Path to font file */
+}
+
+/* Define custom Budmo Jigglerish font */
+@font-face {
+    font-family: 'Budmo Jigglerish'; /* Second font name */
+    src: url('/static/budmo jigglish.otf') format('opentype'); /* Path to second font file - ADJUST IF NEEDED */
+}
+
+/* Keyframes for font switching */
+@keyframes fontSwitch {
+    0%, 49.9% {
+        font-family: 'Budmo Jiggler', 'Comic Sans MS', cursive, sans-serif;
+    }
+    50%, 100% {
+        font-family: 'Budmo Jigglerish', 'Comic Sans MS', cursive, sans-serif;
+    }
+}
+
+/* Added Party Cam Header Style */
+h1 {
+    position: absolute; /* Position relative to container */
+    top: 20px; /* Position from the top */
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: 6em; /* Make it MUCH larger */
+    color: #ff4081; /* Fun pink color */
+    text-shadow: 3px 3px 6px rgba(0,0,0,0.4); /* Stronger shadow */
+    animation: fontSwitch 0.5s infinite step-end; /* Apply the switching animation */
+    z-index: 10; /* Ensure it's above the video/canvas */
+    pointer-events: none; /* Prevent it from blocking clicks */
+    margin: 0; /* Remove default margins */
+}
+
+.container {
+    position: relative;
+}

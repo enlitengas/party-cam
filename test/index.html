@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Webcam Painter</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            text-align: center;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+        canvas {
+            border: 1px solid #333;
+            cursor: crosshair;
+        }
+        .controls {
+            margin: 10px 0;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        button {
+            padding: 8px 15px;
+            cursor: pointer;
+        }
+        input[type="color"], input[type="range"] {
+            vertical-align: middle;
+        }
+        .status {
+            color: #555;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Webcam Painter</h1>
+    <div class="status" id="status">Connecting to webcam stream...</div>
+    
+    <div class="container">
+        <canvas id="canvas" width="640" height="480"></canvas>
+        
+        <div class="controls">
+            <div>
+                <label for="brushColor">Brush Color: </label>
+                <input type="color" id="brushColor" value="#ff0000">
+            </div>
+            
+            <div>
+                <label for="brushSize">Brush Size: </label>
+                <input type="range" id="brushSize" min="1" max="50" value="5">
+                <span id="brushSizeValue">5</span>px
+            </div>
+            
+            <button id="clearBtn">Clear Drawing</button>
+            <button id="saveBtn">Save Image</button>
+            <button id="toggleDrawing">Pause Drawing</button>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // Configuration - update with your Motion server details
+            const motionServerUrl = 'http://172.16.254.96:8082';
+            const streamUrl = `${motionServerUrl}/?action=snapshot`;
+            
+            // DOM elements
+            const canvas = document.getElementById('canvas');
+            const ctx = canvas.getContext('2d');
+            const statusEl = document.getElementById('status');
+            const brushColorInput = document.getElementById('brushColor');
+            const brushSizeInput = document.getElementById('brushSize');
+            const brushSizeValue = document.getElementById('brushSizeValue');
+            const clearBtn = document.getElementById('clearBtn');
+            const saveBtn = document.getElementById('saveBtn');
+            const toggleDrawingBtn = document.getElementById('toggleDrawing');
+
+            // Variables
+            let isDrawing = false;
+            let isConnected = false;
+            let isPaused = false;
+            let lastX = 0;
+            let lastY = 0;
+            let frameCount = 0;
+            const drawingLayer = document.createElement('canvas');
+            drawingLayer.width = canvas.width;
+            drawingLayer.height = canvas.height;
+            const drawingCtx = drawingLayer.getContext('2d');
+            
+            // Initialize brush size display
+            brushSizeValue.textContent = brushSizeInput.value;
+            
+            // Webcam image and refresh
+            const img = new Image();
+            img.crossOrigin = 'anonymous'; // Try to handle CORS issues
+            
+            function refreshWebcam() {
+                if (isPaused) return;
+                
+                img.src = streamUrl + '&t=' + new Date().getTime(); // Add timestamp to avoid caching
+                
+                img.onload = () => {
+                    if (!isConnected) {
+                        statusEl.textContent = 'Connected to webcam stream';
+                        isConnected = true;
+                    }
+                    
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(drawingLayer, 0, 0);
+                    
+                    frameCount++;
+                    if (frameCount % 30 === 0) {
+                        statusEl.textContent = 'Stream active - FPS: ' + 
+                            (1000 / (Date.now() - img.loadTime)).toFixed(1);
+                    }
+                    
+                    img.loadTime = Date.now();
+                    setTimeout(refreshWebcam, 50); // ~20 FPS
+                };
+                
+                img.onerror = () => {
+                    statusEl.textContent = 'Error connecting to webcam. Check URL and CORS settings.';
+                    isConnected = false;
+                    setTimeout(refreshWebcam, 2000); // Retry after 2 seconds
+                };
+                
+                img.loadTime = Date.now();
+            }
+            
+            // Drawing functionality
+            function startDraw(e) {
+                isDrawing = true;
+                [lastX, lastY] = getMousePosition(e);
+            }
+            
+            function endDraw() {
+                isDrawing = false;
+            }
+            
+            function draw(e) {
+                if (!isDrawing) return;
+                
+                const [currentX, currentY] = getMousePosition(e);
+                const brushSize = parseInt(brushSizeInput.value);
+                
+                drawingCtx.lineJoin = 'round';
+                drawingCtx.lineCap = 'round';
+                drawingCtx.strokeStyle = brushColorInput.value;
+                drawingCtx.lineWidth = brushSize;
+                
+                drawingCtx.beginPath();
+                drawingCtx.moveTo(lastX, lastY);
+                drawingCtx.lineTo(currentX, currentY);
+                drawingCtx.stroke();
+                
+                [lastX, lastY] = [currentX, currentY];
+            }
+            
+            function getMousePosition(e) {
+                const rect = canvas.getBoundingClientRect();
+                return [
+                    (e.clientX - rect.left) / (rect.right - rect.left) * canvas.width,
+                    (e.clientY - rect.top) / (rect.bottom - rect.top) * canvas.height
+                ];
+            }
+            
+            // Event listeners
+            canvas.addEventListener('mousedown', startDraw);
+            canvas.addEventListener('mouseup', endDraw);
+            canvas.addEventListener('mousemove', draw);
+            canvas.addEventListener('mouseout', endDraw);
+            
+            brushSizeInput.addEventListener('input', () => {
+                brushSizeValue.textContent = brushSizeInput.value;
+            });
+            
+            clearBtn.addEventListener('click', () => {
+                drawingCtx.clearRect(0, 0, drawingLayer.width, drawingLayer.height);
+            });
+            
+            saveBtn.addEventListener('click', () => {
+                // Draw current frame and drawing layer to a new canvas
+                const saveCanvas = document.createElement('canvas');
+                saveCanvas.width = canvas.width;
+                saveCanvas.height = canvas.height;
+                const saveCtx = saveCanvas.getContext('2d');
+                
+                saveCtx.drawImage(canvas, 0, 0);
+                
+                // Convert to image and trigger download
+                const link = document.createElement('a');
+                link.download = 'webcam-drawing-' + new Date().toISOString().slice(0, 19).replace(/:/g, '-') + '.png';
+                link.href = saveCanvas.toDataURL();
+                link.click();
+            });
+            
+            toggleDrawingBtn.addEventListener('click', () => {
+                isPaused = !isPaused;
+                toggleDrawingBtn.textContent = isPaused ? 'Resume Drawing' : 'Pause Drawing';
+                if (!isPaused) {
+                    refreshWebcam();
+                }
+            });
+            
+            // Start capturing
+            refreshWebcam();
+        });
+    </script>
+</body>
+</html>
