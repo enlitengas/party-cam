@@ -13,7 +13,7 @@ import random
 app = Flask(__name__)
 
 # Global variables
-modes = ['detection', 'segmentation', 'pose', 'tracking']
+modes = ['detection', 'segmentation', 'pose']
 sizes = ['n', 's', 'm', 'l', 'x']
 current_size = 'x'
 conf_threshold = 0.25

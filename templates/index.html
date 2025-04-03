@@ -7,11 +7,16 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <script>
         // Pass backend variables to JavaScript
-        const initialMode = "{{ current_mode }}";
-        const initialSize = "{{ current_size }}";
-        const initialConf = {{ conf_threshold }};
-        const availableModes = {{ modes | tojson }};
-        const availableSizes = {{ sizes | tojson }}; // Renamed from model_sizes
+        const initialMode = "detection";
+        const initialSize = "x";
+        const initialConf = 0.5;
+        const availableModes = ["detection", "segmentation", "pose"];
+        const availableSizes = ["n", "s", "m", "l", "x"];
+        console.log("Initial mode:", initialMode);
+        console.log("Initial size:", initialSize);
+        console.log("Initial confidence:", initialConf);
+        console.log("Available modes:", availableModes);
+        console.log("Available sizes:", availableSizes);
     </script>
 </head>
 <body>
@@ -22,6 +27,8 @@
             <video id="webcam" autoplay playsinline muted></video>
             <!-- Canvas element positioned over the video for drawing results -->
             <canvas id="overlay"></canvas>
+            <!-- Second canvas specifically for drawing inference results -->
+            <canvas id="results-overlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 3; pointer-events: none;"></canvas>
         </div>
 
         <!-- Hidden controls panel -->
@@ -30,9 +37,11 @@
             <p><strong>H:</strong> Toggle Controls Panel</p> 
             <p><strong>S:</strong> Toggle Stats Panel</p>
             <p><strong>M:</strong> Cycle Mode ({{ modes | join(', ') }})</p>
+            <p><strong>V:</strong> Toggle Video Source (Webcam/Motion Stream)</p>
             <p><strong>Up/Down Arrow:</strong> Adjust Confidence (+/- 0.05)</p>
             <p><strong>Current Mode:</strong> <span id="current-mode-display">{{ current_mode }}</span></p>
             <p><strong>Current Confidence:</strong> <span id="current-conf-display">{{ conf_threshold }}</span></p>
+            <p><strong>Video Source:</strong> <span id="video-source-display">Webcam</span></p>
         </div>
 
 

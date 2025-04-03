@@ -1,6 +1,7 @@
 // --- Elements ---
-const videoElement = document.getElementById('webcam'); // Keep for potential future use? Or remove if definitely not needed.
+const videoElement = document.getElementById('webcam');
 const canvasElement = document.getElementById('overlay');
+const resultsCanvasElement = document.getElementById('results-overlay');
 const controlsPanel = document.getElementById('controls');
 const statsPanel = document.getElementById('stats');
 const detectionList = document.getElementById('detection-list');
@@ -8,10 +9,16 @@ const fpsDisplay = document.getElementById('fps-display');
 const procTimeDisplay = document.getElementById('proc-time-display');
 const currentModeDisplay = document.getElementById('current-mode-display');
 const currentConfDisplay = document.getElementById('current-conf-display');
+const videoSourceDisplay = document.getElementById('video-source-display');
 const ctx = canvasElement.getContext('2d');
+const resultsCtx = resultsCanvasElement.getContext('2d');
 
 // --- Configuration ---
 const motionStreamURL = "http://172.16.254.96:8082"; // URL of the Motion JPEG stream
+const VIDEO_SOURCE = {
+    WEBCAM: 'webcam',
+    MOTION_STREAM: 'motionStream'
+};
 
 // --- State ---
 let currentMode = initialMode; // From Jinja
@@ -24,20 +31,78 @@ let fps = 0;
 let isProcessing = false; // Flag to prevent concurrent requests
 const classColors = {}; // Cache for generated colors
 let motionImg = new Image(); // Image object for the Motion stream
+let currentVideoSource = VIDEO_SOURCE.WEBCAM; // Default to webcam
+let webcamStream = null; // Store webcam MediaStream
+let modeAutoChangeInterval = null;
+let lastModeChangeTime = Date.now();
 
 // --- Initialization ---
 function init() {
-    console.log("Initializing Motion stream...");
-    // requestWebcamAccess(); // Removed webcam access
-    setupMotionStream();
+    console.log("Initializing video source...");
+    requestWebcamAccess(); // Start with webcam by default
     document.addEventListener('keydown', handleKeydown);
     updateModeDisplay();
     updateConfDisplay();
+    updateVideoSourceDisplay();
     setInterval(updateStats, 1000); // Update stats display periodically
+    startAutoModeCycling();
 }
 
-// --- Motion Stream Setup ---
+// --- Video Source Setup ---
+// Webcam Setup
+function requestWebcamAccess() {
+    console.log("Requesting webcam access...");
+    // Stop any existing streams
+    stopCurrentVideoSource();
+    
+    // Set current source
+    currentVideoSource = VIDEO_SOURCE.WEBCAM;
+    updateVideoSourceDisplay();
+    
+    // Request webcam access
+    navigator.mediaDevices.getUserMedia({ video: true })
+        .then(stream => {
+            console.log("Webcam access granted");
+            webcamStream = stream;
+            videoElement.srcObject = stream;
+            videoElement.style.display = 'block';
+            
+            // Wait for video to be ready
+            videoElement.onloadedmetadata = () => {
+                console.log("Webcam stream loaded");
+                // Set canvas dimensions based on the video
+                canvasElement.width = videoElement.videoWidth;
+                canvasElement.height = videoElement.videoHeight;
+                streamActive = true;
+                lastFrameTime = performance.now(); // Reset FPS timer
+                // Start processing
+                requestAnimationFrame(processVideo);
+            };
+            
+            videoElement.play();
+        })
+        .catch(error => {
+            console.error("Error accessing webcam:", error);
+            displayErrorOnCanvas("Could not access webcam", error.message);
+            // Fall back to motion stream if webcam fails
+            setTimeout(() => setupMotionStream(), 2000);
+        });
+}
+
+// Motion Stream Setup
 function setupMotionStream() {
+    console.log("Setting up motion stream...");
+    // Stop any existing streams
+    stopCurrentVideoSource();
+    
+    // Set current source
+    currentVideoSource = VIDEO_SOURCE.MOTION_STREAM;
+    updateVideoSourceDisplay();
+    
+    // Hide video element
+    if (videoElement) videoElement.style.display = 'none';
+    
+    // Setup motion stream
     motionImg.crossOrigin = 'anonymous';
     motionImg.onload = handleImageLoad;
     motionImg.onerror = handleImageError;
@@ -52,8 +117,6 @@ function handleImageLoad() {
         // Set canvas dimensions based on the first frame
         canvasElement.width = motionImg.naturalWidth;
         canvasElement.height = motionImg.naturalHeight;
-        // Hide the original video element if it's still there
-        if (videoElement) videoElement.style.display = 'none';
         streamActive = true;
         lastFrameTime = performance.now(); // Reset FPS timer
     }
@@ -64,81 +127,157 @@ function handleImageLoad() {
 function handleImageError() {
     console.error("Error loading Motion stream from:", motionStreamURL);
     streamActive = false;
-    // Display error on canvas
+    displayErrorOnCanvas("Error loading video stream", `Could not connect to ${motionStreamURL}`);
+
+    // Attempt to reconnect after a delay
+    console.log("Attempting reconnect in 5 seconds...");
+    setTimeout(() => {
+        if (!streamActive && currentVideoSource === VIDEO_SOURCE.MOTION_STREAM) { 
+             motionImg.src = motionStreamURL + '?' + Date.now(); // Try again, busting cache
+        }
+    }, 5000);
+}
+
+function displayErrorOnCanvas(mainMessage, detailMessage) {
     ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
     ctx.fillStyle = 'rgba(255, 0, 0, 0.7)';
     ctx.fillRect(0, 0, canvasElement.width, canvasElement.height);
     ctx.fillStyle = 'white';
     ctx.font = '20px Arial';
     ctx.textAlign = 'center';
-    ctx.fillText('Error loading video stream.', canvasElement.width / 2, canvasElement.height / 2 - 15);
+    ctx.fillText(mainMessage, canvasElement.width / 2, canvasElement.height / 2 - 15);
     ctx.font = '14px Arial';
-    ctx.fillText(`Could not connect to ${motionStreamURL}`, canvasElement.width / 2, canvasElement.height / 2 + 15);
-
-    // Attempt to reconnect after a delay
-    console.log("Attempting reconnect in 5 seconds...");
-    setTimeout(() => {
-        if (!streamActive) { // Only try if still not active
-             motionImg.src = motionStreamURL + '?' + Date.now(); // Try again, busting cache
-        }
-    }, 5000);
+    ctx.fillText(detailMessage, canvasElement.width / 2, canvasElement.height / 2 + 15);
 }
 
+function stopCurrentVideoSource() {
+    streamActive = false;
+    
+    // Stop webcam if active
+    if (webcamStream) {
+        webcamStream.getTracks().forEach(track => track.stop());
+        webcamStream = null;
+        videoElement.srcObject = null;
+    }
+    
+    // Clear motion stream if active
+    if (currentVideoSource === VIDEO_SOURCE.MOTION_STREAM) {
+        motionImg.src = '';
+    }
+}
+
+function toggleVideoSource() {
+    if (currentVideoSource === VIDEO_SOURCE.WEBCAM) {
+        setupMotionStream();
+    } else {
+        requestWebcamAccess();
+    }
+}
+
+function startAutoModeCycling() {
+    if (modeAutoChangeInterval === null) {
+        console.log('Auto mode cycling started (every 10 seconds)');
+        modeAutoChangeInterval = true;
+        lastModeChangeTime = Date.now();
+    }
+}
+
+function stopAutoModeCycling() {
+    if (modeAutoChangeInterval !== null) {
+        console.log('Auto mode cycling stopped');
+        modeAutoChangeInterval = null;
+    }
+}
+
+function toggleAutoModeCycling() {
+    if (modeAutoChangeInterval === null) {
+        startAutoModeCycling();
+    } else {
+        stopAutoModeCycling();
+    }
+}
 
 // --- Main Processing Loop ---
 async function processVideo() {
-    // Use motionImg instead of videoElement
-    // if (!streamActive || videoElement.paused || videoElement.ended || isProcessing) { // Old check
-    //     requestAnimationFrame(processVideo); // Keep looping even if paused/processing
-    //     return;
-    // }
     if (!streamActive || isProcessing) {
         // If stream isn't active, error handling should reconnect.
         // If processing, wait for the current cycle to finish.
-        // The loop is continued by handleImageLoad -> processVideo -> motionImg.src reload
+        if (currentVideoSource === VIDEO_SOURCE.WEBCAM && streamActive) {
+            requestAnimationFrame(processVideo); // Continue loop for webcam
+        }
         return;
     }
-
-    // Check if video is ready to capture frame (No longer needed for image)
-    /*
-    if (videoElement.readyState < 2) { // HAVE_CURRENT_DATA or higher
-        requestAnimationFrame(processVideo);
-        return;
-    }
-    */
 
     isProcessing = true; // Set flag
 
-    // Ensure canvas matches image dimensions (in case it changes?) - unlikely for motion stream
-    if (canvasElement.width !== motionImg.naturalWidth || canvasElement.height !== motionImg.naturalHeight) {
-         canvasElement.width = motionImg.naturalWidth;
-         canvasElement.height = motionImg.naturalHeight;
-         console.log("Canvas resized to:", canvasElement.width, canvasElement.height); // Log resize
-    }
-
-    // Clear the main canvas *before* drawing the new frame
+    // Clear the main canvas before drawing the new frame
     ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-
-    // Draw the current motion frame onto the main canvas (for user to see)
-    try {
-        ctx.drawImage(motionImg, 0, 0, canvasElement.width, canvasElement.height);
-    } catch (e) {
-         console.error("Error drawing motion image:", e);
-         isProcessing = false;
-         // Don't request next frame immediately if drawing failed
-         handleImageError(); // Trigger error handling
-         return;
-    }
-
 
     // Use a temporary canvas to get the image data
     const tempCanvas = document.createElement('canvas');
-    // Use natural dimensions from the image for the temp canvas
-    tempCanvas.width = motionImg.naturalWidth;
-    tempCanvas.height = motionImg.naturalHeight;
     const tempCtx = tempCanvas.getContext('2d');
-    // Draw the motion image onto the temporary canvas
-    tempCtx.drawImage(motionImg, 0, 0, tempCanvas.width, tempCanvas.height);
+    let sourceWidth, sourceHeight;
+
+    // Handle different video sources
+    if (currentVideoSource === VIDEO_SOURCE.WEBCAM) {
+        // Check if video is ready
+        if (videoElement.readyState < 2) { // HAVE_CURRENT_DATA or higher
+            isProcessing = false;
+            requestAnimationFrame(processVideo);
+            return;
+        }
+
+        // Ensure canvas matches video dimensions
+        if (canvasElement.width !== videoElement.videoWidth || canvasElement.height !== videoElement.videoHeight) {
+            canvasElement.width = videoElement.videoWidth;
+            canvasElement.height = videoElement.videoHeight;
+            // Also resize the results canvas to match
+            resultsCanvasElement.width = videoElement.videoWidth;
+            resultsCanvasElement.height = videoElement.videoHeight;
+            console.log("Canvases resized to:", canvasElement.width, canvasElement.height);
+        }
+
+        // Draw video frame to main canvas
+        try {
+            ctx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+        } catch (e) {
+            console.error("Error drawing webcam video:", e);
+            isProcessing = false;
+            requestAnimationFrame(processVideo);
+            return;
+        }
+
+        // Setup temp canvas for processing
+        sourceWidth = videoElement.videoWidth;
+        sourceHeight = videoElement.videoHeight;
+        tempCanvas.width = sourceWidth;
+        tempCanvas.height = sourceHeight;
+        tempCtx.drawImage(videoElement, 0, 0, tempCanvas.width, tempCanvas.height);
+    } else { // MOTION_STREAM
+        // Ensure canvas matches image dimensions
+        if (canvasElement.width !== motionImg.naturalWidth || canvasElement.height !== motionImg.naturalHeight) {
+            canvasElement.width = motionImg.naturalWidth;
+            canvasElement.height = motionImg.naturalHeight;
+            console.log("Canvas resized to:", canvasElement.width, canvasElement.height);
+        }
+
+        // Draw motion frame to main canvas
+        try {
+            ctx.drawImage(motionImg, 0, 0, canvasElement.width, canvasElement.height);
+        } catch (e) {
+            console.error("Error drawing motion image:", e);
+            isProcessing = false;
+            handleImageError(); // Trigger error handling
+            return;
+        }
+
+        // Setup temp canvas for processing
+        sourceWidth = motionImg.naturalWidth;
+        sourceHeight = motionImg.naturalHeight;
+        tempCanvas.width = sourceWidth;
+        tempCanvas.height = sourceHeight;
+        tempCtx.drawImage(motionImg, 0, 0, tempCanvas.width, tempCanvas.height);
+    }
 
     // Get image data as base64
     const imageData = tempCanvas.toDataURL('image/jpeg', 0.8); // Use JPEG, quality 0.8
@@ -168,12 +307,20 @@ async function processVideo() {
         // First, clear the canvas
         ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
         
-        // Redraw the current motion frame
-        ctx.drawImage(motionImg, 0, 0, canvasElement.width, canvasElement.height);
+        // Redraw the current video frame based on source
+        if (currentVideoSource === VIDEO_SOURCE.WEBCAM) {
+            ctx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+        } else {
+            ctx.drawImage(motionImg, 0, 0, canvasElement.width, canvasElement.height);
+        }
+
+        // Log the received data for debugging
+        console.log("Received data:", data);
 
         // Draw results onto the overlay canvas
         if (data.results) {
              // Pass original dimensions for scaling
+             console.log("Drawing results!")
              drawResults(data.results, original_width, original_height);
              // Update server processing time display immediately
              procTimeDisplay.textContent = data.processing_time_ms?.toFixed(1) ?? 'N/A';
@@ -193,12 +340,8 @@ async function processVideo() {
 
     } catch (error) {
         console.error('Error processing image:', error);
-        // Optionally clear canvas or display an error overlay
-        ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-        ctx.fillStyle = 'rgba(255, 0, 0, 0.5)';
-        ctx.fillRect(0, 0, canvasElement.width, canvasElement.height);
-        ctx.fillStyle = 'white';
-        ctx.font = '20px Arial';
+        // Display error overlay
+        displayErrorOnCanvas('Error processing image', error.message);
         ctx.textAlign = 'center';
         ctx.fillText('Processing Error', canvasElement.width / 2, canvasElement.height / 2);
 
@@ -207,7 +350,11 @@ async function processVideo() {
          // requestAnimationFrame(processVideo); // Old loop mechanism
          // Trigger loading the next frame from the stream
          if (streamActive) {
-             motionImg.src = motionStreamURL + '?' + Date.now(); // Force reload by changing URL slightly
+             if (currentVideoSource === VIDEO_SOURCE.WEBCAM) {
+                 requestAnimationFrame(processVideo); // Continue loop for webcam
+             } else {
+                 motionImg.src = motionStreamURL + '?' + Date.now(); // Force reload by changing URL slightly
+             }
          }
     }
 }
@@ -215,17 +362,38 @@ async function processVideo() {
 // --- Drawing Functions ---
 
 function getRandomColor(seed) {
-    // Simple hash function for seed -> color mapping
-    let hash = 0;
+    // Predefined color palette with distinct, vibrant colors
+    const colorPalette = [
+        'rgb(255, 0, 0)',      // Red
+        'rgb(0, 255, 0)',      // Green
+        'rgb(0, 0, 255)',      // Blue
+        'rgb(255, 255, 0)',    // Yellow
+        'rgb(255, 0, 255)',    // Magenta
+        'rgb(0, 255, 255)',    // Cyan
+        'rgb(255, 128, 0)',    // Orange
+        'rgb(128, 0, 255)',    // Purple
+        'rgb(0, 128, 255)',    // Light Blue
+        'rgb(255, 0, 128)',    // Pink
+        'rgb(128, 255, 0)',    // Lime
+        'rgb(0, 255, 128)',    // Teal
+        'rgb(128, 128, 255)',  // Lavender
+        'rgb(255, 128, 128)',  // Light Red
+        'rgb(128, 255, 128)',  // Light Green
+        'rgb(192, 0, 0)',      // Dark Red
+        'rgb(0, 192, 0)',      // Dark Green
+        'rgb(0, 0, 192)',      // Dark Blue
+        'rgb(192, 192, 0)',    // Olive
+        'rgb(192, 0, 192)'     // Dark Magenta
+    ];
+    
+    // Use the seed to select a color from the palette
+    let index = 0;
     const strSeed = String(seed);
     for (let i = 0; i < strSeed.length; i++) {
-        hash = strSeed.charCodeAt(i) + ((hash << 5) - hash);
-        hash = hash & hash; // Convert to 32bit integer
+        index = (index + strSeed.charCodeAt(i)) % colorPalette.length;
     }
-    const r = (hash & 0xFF0000) >> 16;
-    const g = (hash & 0x00FF00) >> 8;
-    const b = hash & 0x0000FF;
-    return `rgb(${r}, ${g}, ${b})`;
+    
+    return colorPalette[index];
 }
 
 function getColorForClass(classId, className, trackId = null) {
@@ -244,80 +412,98 @@ function getColorForClass(classId, className, trackId = null) {
 
 
 function drawResults(results, originalWidth, originalHeight) {
+    // Make sure the results canvas is properly sized
+    if (resultsCanvasElement.width !== canvasElement.width || resultsCanvasElement.height !== canvasElement.height) {
+        resultsCanvasElement.width = canvasElement.width;
+        resultsCanvasElement.height = canvasElement.height;
+        console.log("Results canvas resized to:", resultsCanvasElement.width, resultsCanvasElement.height);
+    }
+
+    // Clear the results canvas before drawing
+    resultsCtx.clearRect(0, 0, resultsCanvasElement.width, resultsCanvasElement.height);
+
     // Check if original dimensions are valid
     if (!originalWidth || !originalHeight || originalWidth <= 0 || originalHeight <= 0) {
         console.error("Invalid original dimensions received:", originalWidth, originalHeight);
         // Optionally draw an error message on canvas
-        ctx.fillStyle = 'red';
-        ctx.font = '16px Arial';
-        ctx.fillText('Error: Invalid dimensions from server.', 10, 20);
+        resultsCtx.fillStyle = 'red';
+        resultsCtx.font = '16px Arial';
+        resultsCtx.fillText('Error: Invalid dimensions from server.', 10, 20);
         return; // Stop drawing if dimensions are invalid
     }
-    
-    console.log("Drawing results:", results.length, "items");
+
+    // Log mode and results count
+    console.log(`drawResults called. Mode: ${currentMode}, Results: ${results.length}`);
 
     // Calculate scaling factors
-    const scaleX = canvasElement.width / originalWidth;
-    const scaleY = canvasElement.height / originalHeight;
+    const scaleX = resultsCanvasElement.width / originalWidth;
+    const scaleY = resultsCanvasElement.height / originalHeight;
 
-    // Draw all results directly on the main canvas
-    results.forEach(result => {
+    // No test elements needed anymore
+
+    // Draw all results directly on the results canvas
+    results.forEach((result, index) => {
+        // Log the individual result object
+    
+
         const { box, confidence, class_id, class_name, track_id, mask, keypoints, keypoints_conf } = result;
-        //const [x1, y1, x2, y2] = box.map(coord => Math.round(coord)); // OLD: Direct mapping
+        
+        // Get a unique color for this class
         const color = getColorForClass(class_id, class_name, track_id);
         
-        // Set styles on main context
-        ctx.strokeStyle = color;
-        ctx.fillStyle = color;
-        ctx.lineWidth = 2;
-        ctx.font = '12px Arial';
+        // Set styles on results context
+        resultsCtx.strokeStyle = color;
+        resultsCtx.fillStyle = color;
+        resultsCtx.lineWidth = 2;
+        resultsCtx.font = '12px Arial';
 
-        // Styles are now set at the start of each result loop
-
-        // --- Scale and Draw Bounding Box (Common to most modes) ---
-        if (box && (currentMode === 'detection' || currentMode === 'tracking' || currentMode === 'pose' || currentMode === 'segmentation')) { // Draw box for seg/pose too for label
+        // --- Draw Bounding Box (only in detection mode) ---
+        if (box && currentMode === 'detection') {
             const [x1, y1, x2, y2] = box;
             const scaledX1 = Math.round(x1 * scaleX);
             const scaledY1 = Math.round(y1 * scaleY);
             const scaledWidth = Math.round((x2 - x1) * scaleX);
             const scaledHeight = Math.round((y2 - y1) * scaleY);
 
-            ctx.strokeRect(scaledX1, scaledY1, scaledWidth, scaledHeight);
+            // Draw box with class-specific color
+            resultsCtx.strokeStyle = color;
+            resultsCtx.lineWidth = 3;
+            resultsCtx.strokeRect(scaledX1, scaledY1, scaledWidth, scaledHeight);
 
-            // --- Draw Label (using scaled coordinates) ---
-            let label = `${class_name}`;
+            // Draw label with contrasting background
+            let label = `${class_name} ${confidence.toFixed(2)}`;
             if (track_id !== null && track_id !== undefined) {
-                 label += ` #${track_id}`;
+                label += ` #${track_id}`;
             }
-            label += ` ${confidence.toFixed(2)}`;
-
-            const textWidth = ctx.measureText(label).width;
-            // Position label relative to the scaled box
-            ctx.fillRect(scaledX1, scaledY1 - 14, textWidth + 4, 14); // Background for text
-            ctx.fillStyle = 'white'; // Text color
-            ctx.fillText(label, scaledX1 + 2, scaledY1 - 2);
-            ctx.fillStyle = color; // Reset fillStyle for next element
+            
+            resultsCtx.fillStyle = 'black';
+            resultsCtx.fillRect(scaledX1, scaledY1 - 20, resultsCtx.measureText(label).width + 10, 20);
+            resultsCtx.fillStyle = 'white';
+            resultsCtx.fillText(label, scaledX1 + 5, scaledY1 - 5);
         }
-
-        // --- Scale and Draw Segmentation Mask ---
+        
+        // --- Draw Segmentation Mask ---
         if (mask && currentMode === 'segmentation') {
-            ctx.globalAlpha = 0.5; // Semi-transparent mask
-            ctx.beginPath();
+            resultsCtx.globalAlpha = 0.5; // Semi-transparent mask
+            resultsCtx.fillStyle = color;
+            resultsCtx.beginPath();
+            
             mask.forEach((point, index) => {
                 const scaledX = Math.round(point[0] * scaleX);
                 const scaledY = Math.round(point[1] * scaleY);
                 if (index === 0) {
-                    ctx.moveTo(scaledX, scaledY);
+                    resultsCtx.moveTo(scaledX, scaledY);
                 } else {
-                    ctx.lineTo(scaledX, scaledY);
+                    resultsCtx.lineTo(scaledX, scaledY);
                 }
             });
-            ctx.closePath();
-            ctx.fill();
-            ctx.globalAlpha = 1.0; // Reset alpha
+            
+            resultsCtx.closePath();
+            resultsCtx.fill();
+            resultsCtx.globalAlpha = 1.0; // Reset alpha
         }
-
-        // --- Scale and Draw Pose Keypoints ---
+        
+        // --- Draw Pose Keypoints ---
         if (keypoints && keypoints_conf && currentMode === 'pose') {
             // Define connections (pairs of keypoint indices)
             // COCO keypoint indices: 0:Nose, 1:LEye, 2:REye, 3:LEar, 4:REar, 5:LShoulder, 6:RShoulder, 7:LElbow, 8:RElbow, 9:LWrist, 10:RWrist, 11:LHip, 12:RHip, 13:LKnee, 14:RKnee, 15:LAnkle, 16:RAnkle
@@ -327,14 +513,14 @@ function drawResults(results, originalWidth, originalHeight) {
                 [11, 12], [5, 11], [6, 12], // Torso
                 [11, 13], [13, 15], [12, 14], [14, 16] // Legs
             ];
-            const keypointColor = 'lime'; // Use a distinct color for keypoints
-            const connectionColor = 'cyan';
+            const keypointColor = color; // Use class color for keypoints
+            const connectionColor = color;
             const keypointRadius = 3;
             const minKeypointConf = 0.5; // Minimum confidence to draw a keypoint/connection
 
             // Draw connections
-            ctx.strokeStyle = connectionColor;
-            ctx.lineWidth = 1;
+            resultsCtx.strokeStyle = connectionColor;
+            resultsCtx.lineWidth = 2;
             connections.forEach(conn => {
                 const [idx1, idx2] = conn;
                 if (keypoints.length > idx1 && keypoints.length > idx2 &&
@@ -348,30 +534,30 @@ function drawResults(results, originalWidth, originalHeight) {
                     const scaledX2_kp = Math.round(x_2 * scaleX);
                     const scaledY2_kp = Math.round(y_2 * scaleY);
 
-                    ctx.beginPath();
-                    ctx.moveTo(scaledX1_kp, scaledY1_kp);
-                    ctx.lineTo(scaledX2_kp, scaledY2_kp);
-                    ctx.stroke();
+                    resultsCtx.beginPath();
+                    resultsCtx.moveTo(scaledX1_kp, scaledY1_kp);
+                    resultsCtx.lineTo(scaledX2_kp, scaledY2_kp);
+                    resultsCtx.stroke();
                 }
             });
 
             // Draw keypoints
-            ctx.fillStyle = keypointColor;
+            resultsCtx.fillStyle = keypointColor;
             keypoints.forEach((point, index) => {
                 if (keypoints_conf.length > index && keypoints_conf[index] >= minKeypointConf) {
                     const [x, y] = point;
                     const scaledX = Math.round(x * scaleX);
                     const scaledY = Math.round(y * scaleY);
-                    ctx.beginPath();
-                    ctx.arc(scaledX, scaledY, keypointRadius, 0, 2 * Math.PI);
-                    ctx.fill();
+                    resultsCtx.beginPath();
+                    resultsCtx.arc(scaledX, scaledY, keypointRadius, 0, 2 * Math.PI);
+                    resultsCtx.fill();
                 }
             });
         }
     });
     
-    // Debug - confirm drawing completed
-    console.log("Drawing completed directly on canvas");
+    // No final marker needed anymore
+    
 }
 
 // --- Stats Update ---
@@ -405,8 +591,16 @@ async function updateStats() {
         console.error("Error fetching stats:", error);
         detectionList.innerHTML = '<li>Error loading stats</li>';
     }
+    
+    // Check if it's time to auto-change the mode
+    if (modeAutoChangeInterval !== null && Date.now() - lastModeChangeTime > 10000) {
+        cycleMode();
+        lastModeChangeTime = Date.now();
+    }
+    
+    // Schedule next update
+    setTimeout(updateStats, 1000);
 }
-
 
 // --- Control Handlers ---
 function handleKeydown(event) {
@@ -420,12 +614,18 @@ function handleKeydown(event) {
         case 'M':
             cycleMode();
             break;
+        case 'V':
+            toggleVideoSource();
+            break;
         case 'ARROWUP':
              adjustConfidence(0.05);
              break;
         case 'ARROWDOWN':
              adjustConfidence(-0.05);
              break;
+        case 'A':
+            toggleAutoModeCycling();
+            break;
     }
 }
 
@@ -440,7 +640,6 @@ function adjustConfidence(delta) {
      newConf = Math.max(0.05, Math.min(1.0, newConf)); // Clamp between 0.05 and 1.0
      setConfidence(newConf);
 }
-
 
 async function setMode(mode) {
     if (!availableModes.includes(mode)) {
@@ -502,6 +701,12 @@ function updateModeDisplay() {
 
 function updateConfDisplay() {
     currentConfDisplay.textContent = currentConf.toFixed(2);
+}
+
+function updateVideoSourceDisplay() {
+    if (videoSourceDisplay) {
+        videoSourceDisplay.textContent = currentVideoSource === VIDEO_SOURCE.WEBCAM ? 'Webcam' : 'Motion Stream';
+    }
 }
 
 
